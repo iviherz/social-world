@@ -1,0 +1,3 @@
+ 'use client';
+import {usePathname} from 'next/navigation';import {useLocale} from './LocaleProvider';import {locales,languageNames} from '@/lib/i18n';
+export function LanguageSelector(){const {locale,tr}=useLocale();const path=usePathname();return <form action="/api/locale" method="post" className="language-toolbar"><label>{tr('Idiomas')} <select name="locale" defaultValue={locale} onChange={e=>e.currentTarget.form?.requestSubmit()}>{locales.map(code=><option value={code} key={code} lang={code}>{languageNames[code]}</option>)}</select></label><input type="hidden" name="returnTo" value={path||'/'}/><noscript><button>OK</button></noscript></form>;}

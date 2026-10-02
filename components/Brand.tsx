@@ -1,0 +1,2 @@
+'use client';import {useLocale} from './LocaleProvider';
+export function Brand({name='Tu mundo'}:{name?:string}){const {tr}=useLocale();return <span className="brand"><svg width="30" height="40" viewBox="0 0 30 40" aria-hidden="true"><path d="M7 37 9 3m0 1c8-5 10 7 18 3l-2 15c-8 3-11-8-17-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg><span>{name==='Tu mundo'?tr(name):name}</span></span>;}

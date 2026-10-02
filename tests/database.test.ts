@@ -1,0 +1,45 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {readFileSync} from 'node:fs';import {PGlite} from '@electric-sql/pglite';
+const A='00000000-0000-4000-8000-000000000001',B='00000000-0000-4000-8000-000000000002',C='00000000-0000-4000-8000-000000000003';
+const client=new PGlite();
+async function as(id:string,sql:string){await client.exec(`reset role; select set_config('request.jwt.claim.sub','${id}',false);set role authenticated;`);return client.query(sql);}
+test('Migraciones y permisos reales en PostgreSQL: aislamiento, estados enmascarados, mensajes y bloqueo',async()=>{
+ await client.exec(`create role anon;create role authenticated;create schema auth;create table auth.users(id uuid primary key);create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;grant usage on schema auth to authenticated,anon;grant execute on function auth.uid() to authenticated,anon;create schema storage;create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);create table storage.objects(id uuid default gen_random_uuid(),bucket_id text,name text);alter table storage.objects enable row level security;grant usage on schema storage to authenticated;grant select,delete on storage.objects to authenticated;`);
+ await client.exec(readFileSync('supabase/migrations/001_initial.sql','utf8'));
+ await client.exec(readFileSync('supabase/migrations/002_countries.sql','utf8'));
+ await client.exec(`insert into auth.users values('${A}'),('${B}'),('${C}');`);
+ await as(A,`update public.preferences set hours_enabled=true where user_id='${A}'`);
+ await as(A,`insert into public.private_durations(id,user_id,minutes,mode) values('10000000-0000-4000-8000-000000000001','${A}',120,'flight')`);
+ assert.equal((await as(B,'select * from public.private_durations')).rows.length,0);
+ await assert.rejects(()=>as(B,`insert into public.private_durations(id,user_id,minutes,mode) values('10000000-0000-4000-8000-000000000002','${A}',50,'flight')`));
+ await as(A,`update public.profiles set visibility='public',share_visited=true,share_wishlist=false where id='${A}'`);
+ await as(B,`update public.profiles set visibility='public' where id='${B}'`);
+ await as(A,`insert into public.country_states values('${A}','ARG',true,true)`);
+ assert.equal((await as(B,'select * from public.country_states')).rows.length,0);
+ assert.deepEqual((await as(B,`select * from public.shared_states('${A}')`)).rows,[{country_code:'ARG',visited:true,wishlist:false}]);
+ await as(A,`insert into public.follows values('${A}','${B}')`);
+ await assert.rejects(()=>as(A,`insert into public.messages(sender_id,recipient_id,body) values('${A}','${B}','hola')`));
+ await as(B,`insert into public.follows values('${B}','${A}')`);
+ await as(A,`insert into public.messages(sender_id,recipient_id,body) values('${A}','${B}','hola')`);
+ assert.equal((await as(B,'select * from public.messages')).rows.length,1);
+ assert.equal((await as(C,'select * from public.messages')).rows.length,0);
+ const col=await as(A,`insert into public.collections(owner_id,name) values('${A}','Privada') returning id`);
+ assert.equal((await as(B,'select * from public.collections')).rows.length,0);
+ await assert.rejects(()=>as(B,`insert into public.collection_items(collection_id,target_type,target_id) values('${(col.rows[0] as {id:string}).id}','profile','${A}')`));
+ await assert.rejects(()=>as(C,`select public.is_cotraveler('${A}','${B}')`));
+ await as(A,`insert into public.places(id,creator_id,name,country_code) values('20000000-0000-4000-8000-000000000001','${A}','Lugar','ARG')`);
+ await as(A,`insert into public.recommendations(id,author_id,place_id,category,verdict,tip) values('30000000-0000-4000-8000-000000000001','${A}','20000000-0000-4000-8000-000000000001','Culture','recommend','Consejo')`);
+ await assert.rejects(()=>as(A,`insert into public.helpful_votes(user_id,recommendation_id) values('${A}','30000000-0000-4000-8000-000000000001')`));
+ await as(B,`insert into public.helpful_votes(user_id,recommendation_id,created_at) values('${B}','30000000-0000-4000-8000-000000000001','2000-01-01')`);
+ assert.equal(Number(((await as(B,`select helpful from public.reputation(7) where recommendation_id='30000000-0000-4000-8000-000000000001'`)).rows[0] as {helpful:string}).helpful),1);
+ await as(A,`insert into public.blocks values('${A}','${B}')`);
+ assert.equal((await as(B,`select * from public.profiles where id='${A}'`)).rows.length,0);
+ assert.equal((await as(B,`select * from public.shared_states('${A}')`)).rows.length,0);
+ assert.equal((await as(B,'select * from public.messages')).rows.length,0);
+ await assert.rejects(()=>as(B,`insert into public.messages(sender_id,recipient_id,body) values('${B}','${A}','otro')`));
+ await client.exec('reset role;set role anon;');await assert.rejects(()=>client.query('select * from public.private_durations'));
+ await as(A,'select 1');
+ let rateDenied=false;
+ for(let i=0;i<121;i++){try{await as(A,`update public.preferences set hours_enabled=true where user_id='${A}'`);}catch(e){assert.match(String(e),/RATE_LIMIT/);rateDenied=true;break;}}
+ assert.equal(rateDenied,true);
+ await client.close();
+});

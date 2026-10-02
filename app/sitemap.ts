@@ -1,0 +1,1 @@
+import type {MetadataRoute} from 'next';export default function sitemap():MetadataRoute.Sitemap{const url=process.env.APP_URL;if(!url||!url.startsWith('https://'))return [];return ['','/about','/terms','/privacy'].map(p=>({url:url+p}));}
